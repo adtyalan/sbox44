@@ -1,10 +1,9 @@
 import streamlit as st
 
 # ==========================================
-# 1. DATABASE S-BOX 44 (Jantungnya nih!)
+# 1. DATABASE S-BOX 44 (Tetap Pake yang Kuat dari Paper)
 # ==========================================
-# Data ini diambil mentah dari Table 16 di artikel (Proposed S-box 44)
-# Ini adalah "peta" pengganti huruf biar jadi sandi.
+# Sumber: Table 16 - Proposed S-box 44
 sbox_44 = [
     99,
     205,
@@ -264,99 +263,138 @@ sbox_44 = [
     70,
 ]
 
-# Generate Inverse S-box (Buat Dekripsi) secara otomatis
-# Karena S-box itu bijective (unik), kita bisa balik logic-nya
+# Generate Inverse S-box otomatis buat Dekripsi
 inv_sbox_44 = [0] * 256
 for i, val in enumerate(sbox_44):
     inv_sbox_44[val] = i
 
 # ==========================================
-# 2. FUNGSI LOGIKA (The Brain)
+# 2. LOGIKA ENKRIPSI + KUNCI USER
 # ==========================================
 
 
-def encrypt_text(plaintext):
-    """Mengubah teks biasa jadi Hexadecimal pake S-box 44"""
-    encrypted_bytes = []
-    for char in plaintext:
-        # 1. Ubah huruf ke angka ASCII (0-255)
-        val = ord(char)
-        # 2. Substitusi pake S-box 44
-        # (Kalau val > 255 misal emoji, kita modulo 256 biar aman)
-        sub_val = sbox_44[val % 256]
-        encrypted_bytes.append(sub_val)
+def encrypt_with_key(plaintext, key):
+    """Enkripsi pake S-box 44 DITAMBAH Key User"""
+    if not key:
+        return "Error: Kunci/Password nggak boleh kosong!"
 
-    # 3. Ubah jadi Hex biar kelihatan keren kayak 'A4 5F'
+    encrypted_bytes = []
+    key_len = len(key)
+
+    for i, char in enumerate(plaintext):
+        # 1. Ambil karakter input dan karakter kunci
+        char_val = ord(char)
+        key_char = key[i % key_len]  # Ulangi kunci kalau teks lebih panjang
+        key_val = ord(key_char)
+
+        # 2. OPERASI XOR: Gabungin Input sama Kunci
+        # Ini bikin huruf 'A' + Kunci 'B' hasilnya beda sama 'A' + Kunci 'C'
+        mixed_val = char_val ^ key_val
+
+        # 3. Substitusi pake S-box 44 (Biar makin acak)
+        # Pake modulo 256 jaga-jaga kalau hasil XOR > 255
+        final_val = sbox_44[mixed_val % 256]
+
+        encrypted_bytes.append(final_val)
+
+    # Jadiin Hex biar gampang dicopy
     return "".join([f"{b:02x}" for b in encrypted_bytes])
 
 
-def decrypt_text(hex_string):
-    """Mengubah Hexadecimal balik ke teks asli pake Inverse S-box 44"""
+def decrypt_with_key(hex_string, key):
+    """Dekripsi Hex balik ke teks asli, butuh Kunci yang SAMA"""
+    if not key:
+        return "Error: Kunci/Password nggak boleh kosong!"
+
     try:
         decrypted_chars = []
-        # 1. Potong string hex per 2 digit (misal: 'a45f' jadi 'a4', '5f')
+        key_len = len(key)
+
+        # Proses Hex per 2 digit
+        hex_index = 0
         for i in range(0, len(hex_string), 2):
             byte_hex = hex_string[i : i + 2]
-            val = int(byte_hex, 16)  # Ubah hex ke angka
+            val = int(byte_hex, 16)
 
-            # 2. Balikin nilainya pake Inverse S-box
-            orig_val = inv_sbox_44[val]
+            # 1. Balikin substitusi S-box dulu (Inverse S-box)
+            mixed_val = inv_sbox_44[val]
 
-            # 3. Ubah angka balik ke huruf
-            decrypted_chars.append(chr(orig_val))
+            # 2. Ambil karakter kunci yang sesuai urutan
+            key_char = key[hex_index % key_len]
+            key_val = ord(key_char)
+
+            # 3. OPERASI XOR BALIKAN: Pisahin hasil S-box dari Kunci
+            original_val = mixed_val ^ key_val
+
+            decrypted_chars.append(chr(original_val))
+            hex_index += 1
+
         return "".join(decrypted_chars)
     except Exception as e:
-        return "Error: Format Hex salah, Bro! Cek lagi inputnya."
+        return "Error: Format Hex salah atau Kunci nggak cocok!"
 
 
 # ==========================================
-# 3. TAMPILAN WEB (Streamlit UI)
+# 3. TAMPILAN WEB (Streamlit)
 # ==========================================
 
-st.set_page_config(page_title="S-box 44 Cipher", page_icon="🔐")
+st.set_page_config(page_title="S-box 44 + User Key", page_icon="🔐")
 
-st.title("🔐 S-box 44 Encryption App")
-st.write(
-    "Web app simpel buat **Enkripsi & Dekripsi** pake algoritma **S-box 44** dari paper penelitian terbaru."
+st.title("🔐 Super S-box 44 Encryptor")
+st.markdown(
+    """
+Aplikasi ini menggabungkan kekuatan **S-box 44** (dari paper riset) 
+dengan **Kunci Rahasia (Password)** pilihanmu sendiri.
+"""
 )
-st.caption("Based on 'AES S-box modification uses affine matrices exploration' [2025].")
 
-# Bikin Tab biar rapi
-tab1, tab2 = st.tabs(["🔒 Enkripsi", "🔓 Dekripsi"])
+# Input Kunci Rahasia (Global buat Encrypt & Decrypt)
+st.sidebar.header("🔑 Pengaturan Kunci")
+user_key = st.sidebar.text_input(
+    "Masukin Password Rahasia:",
+    type="password",
+    help="Kunci ini wajib diingat buat buka pesan nanti!",
+)
+
+tab1, tab2 = st.tabs(["🔒 Enkripsi Pesan", "🔓 Dekripsi Pesan"])
 
 with tab1:
-    st.header("Enkripsi Data")
-    text_input = st.text_area("Masukin Pesan Rahasia Lu:", "Halo Dunia")
+    st.subheader("Buat Pesan Rahasia")
+    plain_text = st.text_area("Tulis pesan lu di sini:")
 
-    if st.button("Enkripsi Sekarang! 🚀"):
-        if text_input:
-            result = encrypt_text(text_input)
-            st.success("Berhasil Dienkripsi!")
-            st.code(result, language="text")
-            st.write("Simpen kode di atas, itu pesan rahasia lu.")
+    if st.button("Kunci Pesan Ini! 🔒"):
+        if plain_text and user_key:
+            cipher_result = encrypt_with_key(plain_text, user_key)
+            st.success("Pesan berhasil diamankan!")
+            st.code(cipher_result, language="text")
+            st.info("Copy kode di atas. Orang lain gak bisa baca tanpa password lu.")
+        elif not user_key:
+            st.error("Woi, password-nya diisi dulu di menu sebelah kiri! 👈")
         else:
-            st.warning("Isi dulu pesannya dong.")
+            st.warning("Tulis dulu pesannya, Bro.")
 
 with tab2:
-    st.header("Dekripsi Data")
-    hex_input = st.text_area("Masukin Kode Hex (Hasil Enkripsi):")
+    st.subheader("Buka Pesan Rahasia")
+    cipher_input = st.text_area("Tempel kode aneh (Hex) di sini:")
 
-    if st.button("Buka Pesan! 🔓"):
-        if hex_input:
-            # Bersihin spasi kalau user iseng masukin spasi
-            clean_hex = hex_input.replace(" ", "")
-            result = decrypt_text(clean_hex)
+    if st.button("Buka Kunci! 🔓"):
+        if cipher_input and user_key:
+            # Hapus spasi iseng
+            clean_hex = cipher_input.replace(" ", "").strip()
+            decrypted_result = decrypt_with_key(clean_hex, user_key)
 
-            if "Error" in result:
-                st.error(result)
+            if "Error" in decrypted_result:
+                st.error(decrypted_result)
             else:
                 st.success("Pesan Terbuka:")
-                st.balloons()
-                st.write(f"**{result}**")
+                st.balloons()  # Efek asik
+                st.write(f"Isi Pesan: **{decrypted_result}**")
+        elif not user_key:
+            st.error("Password-nya mana? Isi di sidebar kiri dulu! 👈")
         else:
-            st.warning("Masukin dulu kodenya, Bro.")
+            st.warning("Masukin dulu kode enkripsinya.")
 
 st.markdown("---")
-st.write(
-    "Dibuat dengan 💻 & ☕ | S-box 44 Strength Value: **16.0031** (Lebih kuat dari AES standar!)"
+st.caption(
+    "Implementation based on Modified AES S-box 44  combined with XOR Key Mixing."
 )
