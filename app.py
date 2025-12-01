@@ -1,9 +1,8 @@
 import streamlit as st
 
 # ==========================================
-# 1. DATABASE S-BOX 44 (Tetap Pake yang Kuat dari Paper)
+# 1. DATA S-BOX 44
 # ==========================================
-# Sumber: Table 16 - Proposed S-box 44
 sbox_44 = [
     99,
     205,
@@ -263,138 +262,208 @@ sbox_44 = [
     70,
 ]
 
-# Generate Inverse S-box otomatis buat Dekripsi
 inv_sbox_44 = [0] * 256
 for i, val in enumerate(sbox_44):
     inv_sbox_44[val] = i
 
 # ==========================================
-# 2. LOGIKA ENKRIPSI + KUNCI USER
+# 2. HELPER FUNCTIONS (128-bit Logic)
 # ==========================================
 
 
-def encrypt_with_key(plaintext, key):
-    """Enkripsi pake S-box 44 DITAMBAH Key User"""
-    if not key:
-        return "Error: Kunci/Password nggak boleh kosong!"
-
-    encrypted_bytes = []
-    key_len = len(key)
-
-    for i, char in enumerate(plaintext):
-        # 1. Ambil karakter input dan karakter kunci
-        char_val = ord(char)
-        key_char = key[i % key_len]  # Ulangi kunci kalau teks lebih panjang
-        key_val = ord(key_char)
-
-        # 2. OPERASI XOR: Gabungin Input sama Kunci
-        # Ini bikin huruf 'A' + Kunci 'B' hasilnya beda sama 'A' + Kunci 'C'
-        mixed_val = char_val ^ key_val
-
-        # 3. Substitusi pake S-box 44 (Biar makin acak)
-        # Pake modulo 256 jaga-jaga kalau hasil XOR > 255
-        final_val = sbox_44[mixed_val % 256]
-
-        encrypted_bytes.append(final_val)
-
-    # Jadiin Hex biar gampang dicopy
-    return "".join([f"{b:02x}" for b in encrypted_bytes])
+def pad_text(text):
+    """Bikin teks jadi kelipatan 16 byte (Blok AES)"""
+    while len(text) % 16 != 0:
+        text += " "  # Tambah spasi sampe pas bloknya
+    return text
 
 
-def decrypt_with_key(hex_string, key):
-    """Dekripsi Hex balik ke teks asli, butuh Kunci yang SAMA"""
-    if not key:
-        return "Error: Kunci/Password nggak boleh kosong!"
-
-    try:
-        decrypted_chars = []
-        key_len = len(key)
-
-        # Proses Hex per 2 digit
-        hex_index = 0
-        for i in range(0, len(hex_string), 2):
-            byte_hex = hex_string[i : i + 2]
-            val = int(byte_hex, 16)
-
-            # 1. Balikin substitusi S-box dulu (Inverse S-box)
-            mixed_val = inv_sbox_44[val]
-
-            # 2. Ambil karakter kunci yang sesuai urutan
-            key_char = key[hex_index % key_len]
-            key_val = ord(key_char)
-
-            # 3. OPERASI XOR BALIKAN: Pisahin hasil S-box dari Kunci
-            original_val = mixed_val ^ key_val
-
-            decrypted_chars.append(chr(original_val))
-            hex_index += 1
-
-        return "".join(decrypted_chars)
-    except Exception as e:
-        return "Error: Format Hex salah atau Kunci nggak cocok!"
-
-
-# ==========================================
-# 3. TAMPILAN WEB (Streamlit)
-# ==========================================
-
-st.set_page_config(page_title="S-box 44 + User Key", page_icon="🔐")
-
-st.title("🔐 Super S-box 44 Encryptor")
-st.markdown(
+def fix_key_128bit(key):
     """
-Aplikasi ini menggabungkan kekuatan **S-box 44** (dari paper riset) 
-dengan **Kunci Rahasia (Password)** pilihanmu sendiri.
-"""
+    MEMAKSA Kunci jadi 128 bit (16 Karakter).
+    Sesuai diagram 'Kunci AES 128 bit'.
+    """
+    if len(key) > 16:
+        return key[:16]  # Kalau kepanjangan, potong.
+    while len(key) < 16:
+        key += "#"  # Kalau kependekan, tambah karakter pagar '#'
+    return key
+
+
+# ==========================================
+# 3. EMPAT FUNGSI UTAMA (Sub, Shift, Mix, Add)
+# ==========================================
+
+
+def sub_bytes(state, sbox):
+    return [sbox[b] for b in state]
+
+
+def shift_rows(state):
+    # Simulasi geser baris
+    new_state = state[:]
+    # Swap simple simulasi shift matrix
+    new_state[1], new_state[5], new_state[9], new_state[13] = (
+        state[5],
+        state[9],
+        state[13],
+        state[1],
+    )
+    return new_state
+
+
+def inv_shift_rows(state):
+    new_state = state[:]
+    new_state[5], new_state[9], new_state[13], new_state[1] = (
+        state[1],
+        state[5],
+        state[9],
+        state[13],
+    )
+    return new_state
+
+
+def simple_mix(state):
+    # Simplified MixColumns (Reversible XOR Neighbor)
+    new_s = state[:]
+    for i in range(0, 16, 2):
+        new_s[i] = new_s[i] ^ new_s[i + 1]
+    return new_s
+
+
+def inv_simple_mix(state):
+    # Kebalikan dari simple_mix
+    new_s = state[:]
+    for i in range(0, 16, 2):
+        new_s[i] = new_s[i] ^ new_s[i + 1]
+    return new_s
+
+
+def add_round_key(state, key_bytes):
+    # XOR dengan kunci 128-bit
+    return [b ^ key_bytes[i] for i, b in enumerate(state)]
+
+
+# ==========================================
+# 4. LOGIKA UTAMA (ENKRIPSI & DEKRIPSI)
+# ==========================================
+
+
+def encrypt_final(plaintext, key):
+    # 1. Pastikan Kunci 128 bit (16 char)
+    real_key = fix_key_128bit(key)
+    key_bytes = [ord(k) for k in real_key]
+
+    # 2. Siapkan Plaintext (Padding biar 16 byte)
+    padded_text = pad_text(plaintext)
+    state = [ord(c) for c in padded_text]
+
+    # 3. Proses per Blok 16 byte (Kalo teks panjang)
+    ciphertext_hex = ""
+
+    # Loop per blok 16 byte
+    for i in range(0, len(state), 16):
+        block = state[i : i + 16]
+
+        # --- INITIAL ROUND ---
+        block = add_round_key(block, key_bytes)
+
+        # --- 9 ROUNDS ---
+        for _ in range(9):
+            block = sub_bytes(block, sbox_44)
+            block = shift_rows(block)
+            block = simple_mix(block)
+            block = add_round_key(block, key_bytes)
+
+        # --- FINAL ROUND ---
+        block = sub_bytes(block, sbox_44)
+        block = shift_rows(block)
+        block = add_round_key(block, key_bytes)
+
+        # Gabung hasil hex
+        ciphertext_hex += "".join([f"{b:02x}" for b in block])
+
+    return ciphertext_hex
+
+
+def decrypt_final(hex_string, key):
+    try:
+        real_key = fix_key_128bit(key)
+        key_bytes = [ord(k) for k in real_key]
+
+        state_all = [
+            int(hex_string[i : i + 2], 16) for i in range(0, len(hex_string), 2)
+        ]
+        plaintext_res = ""
+
+        # Loop per blok 16 byte
+        for i in range(0, len(state_all), 16):
+            block = state_all[i : i + 16]
+
+            # --- INVERSE FINAL ROUND ---
+            block = add_round_key(block, key_bytes)
+            block = inv_shift_rows(block)
+            block = sub_bytes(block, inv_sbox_44)
+
+            # --- INVERSE 9 ROUNDS ---
+            for _ in range(9):
+                block = add_round_key(block, key_bytes)
+                block = inv_simple_mix(block)
+                block = inv_shift_rows(block)
+                block = sub_bytes(block, inv_sbox_44)
+
+            # --- INVERSE INITIAL ROUND ---
+            block = add_round_key(block, key_bytes)
+
+            plaintext_res += "".join([chr(b) for b in block])
+
+        return plaintext_res.strip()  # Hapus spasi padding
+    except:
+        return "Error: Kunci salah atau Hex rusak!"
+
+
+# ==========================================
+# 5. UI STREAMLIT
+# ==========================================
+st.set_page_config(page_title="AES 128-bit Demo", page_icon="🔐")
+
+st.title("🔐 AES-Like 128-bit Encryptor")
+st.info(
+    "Menggunakan S-box 44 dengan standar kunci 128-bit (16 Karakter) sesuai diagram AES."
 )
 
-# Input Kunci Rahasia (Global buat Encrypt & Decrypt)
-st.sidebar.header("🔑 Pengaturan Kunci")
-user_key = st.sidebar.text_input(
-    "Masukin Password Rahasia:",
-    type="password",
-    help="Kunci ini wajib diingat buat buka pesan nanti!",
+# INPUT KEY
+raw_key = st.text_input(
+    "🔑 Masukkan Password:", type="password", help="Otomatis dijadikan 16 karakter."
 )
 
-tab1, tab2 = st.tabs(["🔒 Enkripsi Pesan", "🔓 Dekripsi Pesan"])
+# Tampilkan status kunci biar user tau
+if raw_key:
+    final_key = fix_key_128bit(raw_key)
+    st.caption(
+        f"Status Kunci: '{raw_key}' → Diubah jadi 128-bit: `{final_key}` (Panjang: {len(final_key)} char)"
+    )
 
-with tab1:
-    st.subheader("Buat Pesan Rahasia")
-    plain_text = st.text_area("Tulis pesan lu di sini:")
+col1, col2 = st.columns(2)
 
-    if st.button("Kunci Pesan Ini! 🔒"):
-        if plain_text and user_key:
-            cipher_result = encrypt_with_key(plain_text, user_key)
-            st.success("Pesan berhasil diamankan!")
-            st.code(cipher_result, language="text")
-            st.info("Copy kode di atas. Orang lain gak bisa baca tanpa password lu.")
-        elif not user_key:
-            st.error("Woi, password-nya diisi dulu di menu sebelah kiri! 👈")
+with col1:
+    st.subheader("Enkripsi")
+    txt = st.text_input("Pesan:")
+    if st.button("Enkripsi"):
+        if txt and raw_key:
+            res = encrypt_final(txt, raw_key)
+            st.success("Ciphertext:")
+            st.code(res)
         else:
-            st.warning("Tulis dulu pesannya, Bro.")
+            st.warning("Password wajib diisi!")
 
-with tab2:
-    st.subheader("Buka Pesan Rahasia")
-    cipher_input = st.text_area("Tempel kode aneh (Hex) di sini:")
-
-    if st.button("Buka Kunci! 🔓"):
-        if cipher_input and user_key:
-            # Hapus spasi iseng
-            clean_hex = cipher_input.replace(" ", "").strip()
-            decrypted_result = decrypt_with_key(clean_hex, user_key)
-
-            if "Error" in decrypted_result:
-                st.error(decrypted_result)
-            else:
-                st.success("Pesan Terbuka:")
-                st.balloons()  # Efek asik
-                st.write(f"Isi Pesan: **{decrypted_result}**")
-        elif not user_key:
-            st.error("Password-nya mana? Isi di sidebar kiri dulu! 👈")
+with col2:
+    st.subheader("Dekripsi")
+    hex_in = st.text_input("Ciphertext (Hex):")
+    if st.button("Dekripsi"):
+        if hex_in and raw_key:
+            res = decrypt_final(hex_in, raw_key)
+            st.success("Pesan Terbuka:")
+            st.write(f"**{res}**")
         else:
-            st.warning("Masukin dulu kode enkripsinya.")
-
-st.markdown("---")
-st.caption(
-    "Implementation based on Modified AES S-box 44  combined with XOR Key Mixing."
-)
+            st.warning("Password wajib diisi!")
